@@ -181,6 +181,8 @@ static int sap_enable(struct ofono_modem *modem)
 					DBUS_TYPE_STRING, &str,
 					DBUS_TYPE_INVALID);
 
+    DBG("bt send status %d", status);
+
 	if (status < 0)
 		return -EINVAL;
 

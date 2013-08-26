@@ -85,6 +85,8 @@ static void telit_debug(const char *str, void *user_data)
 
 static void sap_close_io(struct ofono_modem *modem)
 {
+	DBG("");
+	
 	struct telit_data *data = ofono_modem_get_data(modem);
 
 	if (data->bt_io != NULL) {
@@ -118,6 +120,7 @@ static void bt_watch_remove(gpointer userdata)
 static gboolean bt_event_cb(GIOChannel *bt_io, GIOCondition condition,
 							gpointer userdata)
 {
+	DBG("%d", G_IO_IN);
 	struct ofono_modem *modem = userdata;
 	struct telit_data *data = ofono_modem_get_data(modem);
 
@@ -129,9 +132,18 @@ static gboolean bt_event_cb(GIOChannel *bt_io, GIOCondition condition,
 		status = g_io_channel_read_chars(bt_io, buf, 300,
 							&bytes_read, NULL);
 
-		if (bytes_read > 0)
+		if (bytes_read > 0) {
+			char buf_str[300 * 3 + 1] = { 0 };
+			char *endBuf = buf_str;
+			int i;
+			for (i = 0; i < bytes_read; i++) {
+	    		endBuf += sprintf(endBuf, "%02X ", (unsigned char)buf[i]);
+			}
+			DBG("read %zu bytes : %s", bytes_read, buf_str);
+
 			g_io_channel_write_chars(data->hw_io, buf,
 					bytes_read, &bytes_written, NULL);
+		}
 
 		if (status != G_IO_STATUS_NORMAL && status != G_IO_STATUS_AGAIN)
 			return FALSE;
@@ -155,21 +167,32 @@ static void hw_watch_remove(gpointer userdata)
 static gboolean hw_event_cb(GIOChannel *hw_io, GIOCondition condition,
 							gpointer userdata)
 {
+	DBG("%d", G_IO_IN);
 	struct ofono_modem *modem = userdata;
 	struct telit_data *data = ofono_modem_get_data(modem);
 
+	
+	GIOStatus status;
+	gsize bytes_read, bytes_written;
+	gchar buf[300];
+
+	status = g_io_channel_read_chars(hw_io, buf, 300,
+						&bytes_read, NULL);
+	// DBG("%d", status);
+	if (bytes_read > 0) {
+		char buf_str[300 * 3 + 1] = { 0 };
+		char *endBuf = buf_str;
+		int i;
+		for (i = 0; i < bytes_read; i++) {
+    		endBuf += sprintf(endBuf, "%02X ", (unsigned char)buf[i]);
+		}
+		DBG("read %zu bytes : %s", bytes_read, buf_str);
+	}
+
 	if (condition & G_IO_IN) {
-		GIOStatus status;
-		gsize bytes_read, bytes_written;
-		gchar buf[300];
-
-		status = g_io_channel_read_chars(hw_io, buf, 300,
-							&bytes_read, NULL);
-
 		if (bytes_read > 0)
 			g_io_channel_write_chars(data->bt_io, buf,
 					bytes_read, &bytes_written, NULL);
-
 		if (status != G_IO_STATUS_NORMAL && status != G_IO_STATUS_AGAIN)
 			return FALSE;
 
@@ -444,9 +467,13 @@ static void rsen_disable_cb(gboolean ok, GAtResult *result, gpointer user_data)
 	telit_disable(modem);
 }
 
-static int telit_sap_open(void)
+static int telit_sap_open()
 {
-	const char *device = "/dev/ttyUSB4";
+    const char *device = "/dev/ttyUSB0";
+    DBG("");
+    // The result _should_ be /dev/ttyUSB3
+	// const char *device = ofono_modem_get_string(modem, "Aux");
+	// const char *device = "/dev/serial/by-id/usb-FTDI_TTL232R-3V3_FTGACL8D-if00-port0";
 	struct termios ti;
 	int fd;
 
@@ -460,6 +487,8 @@ static int telit_sap_open(void)
 	memset(&ti, 0, sizeof(ti));
 	cfmakeraw(&ti);
 
+    DBG("TTY in raw mode");
+
 	ti.c_cflag |= (B115200 | CLOCAL | CREAD);
 
 	tcflush(fd, TCIOFLUSH);
@@ -468,6 +497,7 @@ static int telit_sap_open(void)
 		return -EBADF;
 	}
 
+    DBG("TTY successfully opened");
 	return fd;
 }
 
@@ -476,6 +506,11 @@ static int telit_sap_enable(struct ofono_modem *modem,
 					int bt_fd)
 {
 	struct telit_data *data = ofono_modem_get_data(modem);
+	// data->chat = open_device(modem, "Aux", "Aux: ");
+	// if (data->chat == NULL) {
+	// 	g_at_chat_unref(data->modem);
+	// 	return -EIO;
+	// }
 	int fd;
 
 	DBG("%p", modem);
@@ -489,6 +524,7 @@ static int telit_sap_enable(struct ofono_modem *modem,
 		close(fd);
 		goto error;
 	}
+    DBG("hw_io opened");
 
 	g_io_channel_set_encoding(data->hw_io, NULL, NULL);
 	g_io_channel_set_buffered(data->hw_io, FALSE);
@@ -497,21 +533,25 @@ static int telit_sap_enable(struct ofono_modem *modem,
 	data->bt_io = g_io_channel_unix_new(bt_fd);
 	if (data->bt_io == NULL)
 		goto error;
+    DBG("bt_io opened");
 
 	g_io_channel_set_encoding(data->bt_io, NULL, NULL);
 	g_io_channel_set_buffered(data->bt_io, FALSE);
 	g_io_channel_set_close_on_unref(data->bt_io, TRUE);
 
-	data->hw_watch = g_io_add_watch_full(data->hw_io, G_PRIORITY_DEFAULT,
+	// Read data from hardware events and forward onto bluetooth channel
+	data->hw_watch = g_io_add_watch_full(data->hw_io, G_PRIORITY_HIGH,
 				G_IO_HUP | G_IO_ERR | G_IO_NVAL | G_IO_IN,
 				hw_event_cb, modem, hw_watch_remove);
 
-	data->bt_watch = g_io_add_watch_full(data->bt_io, G_PRIORITY_DEFAULT,
+	// Read data from bt_io and forward onto modem->hw_io
+	data->bt_watch = g_io_add_watch_full(data->bt_io, G_PRIORITY_HIGH,
 				G_IO_HUP | G_IO_ERR | G_IO_NVAL | G_IO_IN,
 				bt_event_cb, modem, bt_watch_remove);
 
 	data->sap_modem = sap_modem;
-
+	data->chat = open_device(modem, "Aux", "Aux: ");
+    DBG("Start talking on chat %p", data->chat);
 	g_at_chat_register(data->chat, "#RSEN:", telit_rsen_notify,
 				FALSE, modem, NULL);
 
@@ -592,7 +632,8 @@ static void telit_set_online(struct ofono_modem *modem, ofono_bool_t online,
 {
 	struct telit_data *data = ofono_modem_get_data(modem);
 	struct cb_data *cbd = cb_data_new(cb, user_data);
-	char const *command = online ? "AT+CFUN=1,0" : "AT+CFUN=4,0";
+	char const *command = online ? "AT+CFUN=1" : "AT+CFUN=4";
+	//char const *command = online ? "AT+CFUN=1,0" : "AT+CFUN=4,0";
 
 	DBG("modem %p %s", modem, online ? "online" : "offline");
 
