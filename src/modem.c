@@ -866,6 +866,7 @@ static int set_powered(struct ofono_modem *modem, ofono_bool_t powered)
 {
 	const struct ofono_modem_driver *driver = modem->driver;
 	int err = -EINVAL;
+    DBG("%p", modem);
 
 	if (modem->powered_pending == powered)
 		return -EALREADY;
@@ -1024,7 +1025,7 @@ static DBusMessage *set_property_lockdown(struct ofono_modem *modem,
 		}
 
 		modem->pending = dbus_message_ref(msg);
-		modem->timeout = g_timeout_add_seconds(20,
+		modem->timeout = g_timeout_add_seconds(60,
 						set_powered_timeout, modem);
 		return NULL;
 	}
@@ -1102,7 +1103,7 @@ static DBusMessage *modem_set_property(DBusConnection *conn,
 				return __ofono_error_failed(msg);
 
 			modem->pending = dbus_message_ref(msg);
-			modem->timeout = g_timeout_add_seconds(20,
+			modem->timeout = g_timeout_add_seconds(60,
 						set_powered_timeout, modem);
 			return NULL;
 		}
@@ -2005,7 +2006,7 @@ int ofono_modem_register(struct ofono_modem *modem)
 	modem->online_watches = __ofono_watchlist_new(g_free);
 	modem->powered_watches = __ofono_watchlist_new(g_free);
 
-	emit_modem_added(modem);
+	//emit_modem_added(modem);
 	call_modemwatches(modem, TRUE);
 
 	modem->sim_watch = __ofono_modem_add_atom_watch(modem,
