@@ -63,6 +63,12 @@
 static const char *none_prefix[] = { NULL };
 static const char *rsen_prefix[]= { "#RSEN:", NULL };
 
+
+#define	SMARTE_SERVICE "org.smart_e.RSAP"
+#define	SMARTE_INTERFACE		SMARTE_SERVICE ".RSAPServer"
+static GDBusProxy *dbProxy;
+static DBusConnection *connection;
+
 struct telit_data {
 	GAtChat *chat;		/* AT chat */
 	GAtChat *modem;		/* Data port */
@@ -152,6 +158,26 @@ static void hw_watch_remove(gpointer userdata)
 	data->hw_watch = 0;
 }
 
+void smartcard_cb (GObject *gobj, GAsyncResult *res, 
+			gpointer userdata)
+{
+	DBG("smartcard callback");
+	GError *error;
+	GVariant *result;
+	gchar *str;
+	error = NULL;
+	result = g_dbus_proxy_call_finish (dbProxy, res, &error);
+	gchar smartcard_response[300] = "";
+	smartcard_response = g_variant_get_bytestring(result);
+	DBG("received response %s", &smartcard_response)
+
+	//TODO: write back to the hw_channel
+	struct ofono_modem *modem = userdata;
+	struct telit_data *data = ofono_modem_get_data(modem);
+	g_io_channel_write_chars(data->bt_io, smartcard_response,
+					strlen(smartcard_response), &bytes_written, NULL);
+}
+
 static gboolean hw_event_cb(GIOChannel *hw_io, GIOCondition condition,
 							gpointer userdata)
 {
@@ -161,14 +187,30 @@ static gboolean hw_event_cb(GIOChannel *hw_io, GIOCondition condition,
 	if (condition & G_IO_IN) {
 		GIOStatus status;
 		gsize bytes_read, bytes_written;
-		gchar buf[300];
+		gchar buf[300] = "";
 
 		status = g_io_channel_read_chars(hw_io, buf, 300,
 							&bytes_read, NULL);
 
-		if (bytes_read > 0)
+		if (bytes_read > 0) {
+      int cond = condition & G_IO_IN;
+      char buf_str[300 * 3 + 1] = { 0 };
+      char *endBuf = buf_str;
+      int i;
+      for (i = 0; i < bytes_read; i++) {
+        endBuf += sprintf(endBuf, "%02X ", (unsigned char)buf[i]);
+      }
+      DBG("read %zu bytes (cond %d): %s", bytes_read, cond, buf_str);
+    }
+
+
+		if (bytes_read > 0) {
 			g_io_channel_write_chars(data->bt_io, buf,
 					bytes_read, &bytes_written, NULL);
+			g_dbus_proxy_call (dbProxy, “ProcessAPDU”, 
+				g_variant_new_bytestring (buf), G_DBUS_CALL_FLAGS_NONE, 
+				-1, NULL, (GAsyncReadyCallback) smartcard_cb, modem);
+		}
 
 		if (status != G_IO_STATUS_NORMAL && status != G_IO_STATUS_AGAIN)
 			return FALSE;
@@ -446,7 +488,8 @@ static void rsen_disable_cb(gboolean ok, GAtResult *result, gpointer user_data)
 
 static int telit_sap_open(void)
 {
-	const char *device = "/dev/ttyUSB4";
+	const char *device = "/dev/ttyUSB0";
+	DBG("");
 	struct termios ti;
 	int fd;
 
@@ -501,6 +544,11 @@ static int telit_sap_enable(struct ofono_modem *modem,
 	g_io_channel_set_encoding(data->bt_io, NULL, NULL);
 	g_io_channel_set_buffered(data->bt_io, FALSE);
 	g_io_channel_set_close_on_unref(data->bt_io, TRUE);
+
+	// DBUS connectio to smart card reader daemon
+	g_type_init ();
+	connection = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
+	dbProxy = g_dbus_proxy_new_sync(connection, G_DBUS_PROXY_FLAGS_NONE, NULL, “org.smart_e.RSAP”,”/RSAPServer”,”org.smart_e.RSAPServer”, NULL, NULL);	
 
 	data->hw_watch = g_io_add_watch_full(data->hw_io, G_PRIORITY_DEFAULT,
 				G_IO_HUP | G_IO_ERR | G_IO_NVAL | G_IO_IN,
