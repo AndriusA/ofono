@@ -101,6 +101,11 @@ else
 fi
 AC_SUBST(DBUS_DATADIR)
 
+PKG_CHECK_MODULES(GDBUS, gio-2.0 >= 2.30, dummy=yes,
+				AC_MSG_ERROR(GIO >= 2.30 is required))
+AC_SUBST(GDBUS_CFLAGS)
+AC_SUBST(GDBUS_LIBS)
+
 AC_ARG_WITH([systemdunitdir], AC_HELP_STRING([--with-systemdunitdir=DIR],
 	[path to systemd service directory]), [path_systemdunit=${withval}],
 		[path_systemdunit="`$PKG_CONFIG --variable=systemdsystemunitdir systemd`"])
